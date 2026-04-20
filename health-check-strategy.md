@@ -521,3 +521,152 @@ When an on-call engineer receives a DEGRADED or DOWN alert, the `/ready` respons
 ```
 
 The separation prevents restart storms, enables graceful degradation, and gives your monitoring stack three distinct signals — UP, DEGRADED, DOWN — to drive alerts, dashboards, and SLA reporting with precision.
+
+---
+
+## Real-World Example: gas-webfront → energy-contract-api → Salesforce
+
+### Service topology
+
+```mermaid
+graph LR
+    User["User"] --> GW["gas-webfront"]
+
+    GW --> CUM["consumer-user-master-api\ncritical: true"]
+    GW --> ECA["energy-contract-api\ncritical: true"]
+    GW --> GCA["gas-common-api\ncritical: true"]
+    GW --> GBA["gas-billing-api\ncritical: true"]
+    GW --> DCA["denki-common-api\ncritical: true"]
+    GW --> MC[("Memcache\ncritical: true")]
+    GW --> ASA["address-search-api\ncritical: false"]
+
+    ECA --> SF["Salesforce API\n(external)"]
+    ECA --> ECA_DB[("Database\ncritical: true")]
+
+    style SF fill:#FF9800,color:#000
+    style GW fill:#4285F4,color:#fff
+    style ECA fill:#4285F4,color:#fff
+    style ASA fill:#9E9E9E,color:#fff
+```
+
+### Health check ownership — one hop per service
+
+Each service checks only its **direct** dependencies. The chain never propagates upward.
+
+**`gas-webfront /ready` checks:**
+
+```json
+{
+  "status": "UP",
+  "timestamp": "2026-04-20T14:30:00Z",
+  "components": {
+    "memcache":                  { "status": "UP", "latency_ms": 1,  "critical": true  },
+    "consumer_user_master_api":  { "status": "UP", "latency_ms": 10, "critical": true  },
+    "energy_contract_api":       { "status": "UP", "latency_ms": 12, "critical": true  },
+    "gas_common_api":            { "status": "UP", "latency_ms": 9,  "critical": true  },
+    "gas_billing_api":           { "status": "UP", "latency_ms": 11, "critical": true  },
+    "denki_common_api":          { "status": "UP", "latency_ms": 8,  "critical": true  },
+    "address_search_api":        { "status": "UP", "latency_ms": 45, "critical": false }
+  }
+}
+```
+
+> All internal APIs are checked via **TCP reachability only** — not by calling their `/ready` endpoint. Memcache is checked with a lightweight ping command.
+
+**`energy-contract-api /ready` checks:**
+
+```json
+{
+  "status": "UP",
+  "timestamp": "2026-04-20T14:30:00Z",
+  "components": {
+    "database":       { "status": "UP", "latency_ms": 6,   "critical": true },
+    "salesforce_api": { "status": "UP", "latency_ms": 320, "critical": true }
+  }
+}
+```
+
+---
+
+### What happens when Salesforce goes DOWN
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant GW as gas-webfront
+    participant LB as GCP Load Balancer
+    participant ECA as energy-contract-api
+    participant SF as Salesforce API
+
+    Note over SF: Salesforce goes DOWN
+
+    ECA->>SF: background check ping
+    SF--xECA: timeout / connection refused
+
+    ECA->>LB: /ready → 503 DOWN
+    LB-->>ECA: removed from rotation
+
+    User->>GW: POST /contract/submit
+    GW->>ECA: API call
+    ECA-->>GW: 503 (LB rejects — pod out of rotation)
+
+    Note over GW: Catches 503, renders graceful message
+    GW-->>User: "Contract services temporarily unavailable."
+
+    Note over GW: gas-webfront /ready still returns 200
+    Note over GW: Stays in rotation for login, billing, all other flows
+```
+
+---
+
+### What happens when address-search-api goes DOWN
+
+`gas-webfront /ready` returns `DEGRADED` (HTTP 200) — stays in rotation. All critical flows (login, contracts, billing) continue normally. Only address auto-complete is affected, and the application layer handles that by serving a manual address entry fallback.
+
+```json
+{
+  "status": "DEGRADED",
+  "timestamp": "2026-04-20T14:30:00Z",
+  "components": {
+    "memcache":                  { "status": "UP",   "latency_ms": 1,  "critical": true  },
+    "consumer_user_master_api":  { "status": "UP",   "latency_ms": 10, "critical": true  },
+    "energy_contract_api":       { "status": "UP",   "latency_ms": 12, "critical": true  },
+    "gas_common_api":            { "status": "UP",   "latency_ms": 9,  "critical": true  },
+    "gas_billing_api":           { "status": "UP",   "latency_ms": 11, "critical": true  },
+    "denki_common_api":          { "status": "UP",   "latency_ms": 8,  "critical": true  },
+    "address_search_api":        { "status": "DOWN", "critical": false, "error": "Connection refused" }
+  }
+}
+```
+
+---
+
+### The key distinction
+
+| Layer | Responsibility |
+|---|---|
+| **Health check** (`/ready`) | Controls *routing* — should this pod receive traffic at all? |
+| **Application code** | Controls *functionality* — what should the user see when a downstream call fails? |
+
+These are complementary, not interchangeable.
+
+**Do not** pull `gas-webfront` out of rotation when Salesforce is down. That would make login, billing, and all unrelated flows unavailable because of a single downstream API. Webfront is still capable of serving most requests correctly.
+
+**Do** handle the 503 from `energy-contract-api` in webfront's application code and render a user-facing message for the affected flow only.
+
+---
+
+### Why not chain `/ready` calls — the blast radius problem
+
+If `gas-webfront /ready` called `energy-contract-api /ready` instead of a TCP reachability check:
+
+```
+Salesforce DOWN
+  → energy-contract-api /ready returns 503
+    → gas-webfront /ready also returns 503
+      → both layers pulled from LB simultaneously
+        → login, billing, contracts — everything offline
+          → full outage caused by one external API
+```
+
+Chaining `/ready` calls multiplies the blast radius of any single dependency failure across every layer above it. Each service's readiness must be an independent signal based only on its own direct dependencies.
