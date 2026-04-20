@@ -352,7 +352,7 @@ All critical and non-critical dependencies are healthy.
     "database":           { "status": "UP", "latency_ms": 12 },
     "cache_redis":        { "status": "UP", "latency_ms": 3  },
     "payment_api":        { "status": "UP", "latency_ms": 85, "critical": true  },
-    "recommendation_api": { "status": "UP", "latency_ms": 45, "critical": false }
+    "address_search_api": { "status": "UP", "latency_ms": 45, "critical": false }
   }
 }
 ```
@@ -371,7 +371,7 @@ A non-critical dependency is down. Instance stays in rotation. Fallback is activ
     "database":           { "status": "UP",   "latency_ms": 12,  "critical": true  },
     "cache_redis":        { "status": "UP",   "latency_ms": 3,   "critical": true  },
     "payment_api":        { "status": "UP",   "latency_ms": 85,  "critical": true  },
-    "recommendation_api": { "status": "DOWN", "critical": false, "error": "504 Gateway Timeout" }
+    "address_search_api": { "status": "DOWN", "critical": false, "error": "504 Gateway Timeout" }
   }
 }
 ```
@@ -390,7 +390,7 @@ At least one critical dependency is down. Instance is pulled from the Load Balan
     "database":           { "status": "DOWN", "critical": true,  "error": "Connection refused" },
     "cache_redis":        { "status": "UP",   "latency_ms": 3,   "critical": true  },
     "payment_api":        { "status": "UP",   "latency_ms": 85,  "critical": true  },
-    "recommendation_api": { "status": "UP",   "latency_ms": 45,  "critical": false }
+    "address_search_api": { "status": "UP",   "latency_ms": 45,  "critical": false }
   }
 }
 ```
