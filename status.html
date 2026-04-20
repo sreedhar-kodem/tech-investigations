@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Service Health Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: #1a1a2e;
+      color: #fff;
+      padding: 20px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 600; letter-spacing: 0.3px; }
+    header .meta { font-size: 0.8rem; color: #8888aa; }
+
+    .global-banner {
+      padding: 14px 32px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .global-banner.degraded { background: #fff3cd; color: #7d5a00; border-bottom: 2px solid #ffc107; }
+    .global-banner.up       { background: #d4edda; color: #155724; border-bottom: 2px solid #28a745; }
+    .global-banner.down     { background: #f8d7da; color: #721c24; border-bottom: 2px solid #dc3545; }
+    .global-banner .dot {
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+    }
+    .global-banner.degraded .dot { background: #ffc107; }
+    .global-banner.up .dot       { background: #28a745; }
+    .global-banner.down .dot     { background: #dc3545; }
+
+    /* ── Layout ── */
+    main { max-width: 1100px; margin: 32px auto; padding: 0 24px; }
+
+    .section-title {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: #888;
+      margin: 32px 0 12px;
+    }
+
+    /* ── Service Card ── */
+    .service-card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.07);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+
+    .service-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      cursor: pointer;
+      user-select: none;
+      gap: 12px;
+    }
+    .service-header:hover { background: #fafafa; }
+
+    .service-left { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
+    .service-name { font-weight: 600; font-size: 0.95rem; white-space: nowrap; }
+    .service-desc { font-size: 0.78rem; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .service-right { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+    .service-ts { font-size: 0.72rem; color: #aaa; }
+
+    .badge {
+      font-size: 0.7rem; font-weight: 700; letter-spacing: 0.6px;
+      padding: 3px 10px; border-radius: 20px; text-transform: uppercase;
+    }
+    .badge-up       { background: #d4edda; color: #155724; }
+    .badge-degraded { background: #fff3cd; color: #7d5a00; }
+    .badge-down     { background: #f8d7da; color: #721c24; }
+    .badge-starting { background: #e2e3e5; color: #383d41; }
+
+    .chevron {
+      font-size: 0.75rem; color: #bbb;
+      transition: transform 0.2s;
+    }
+    .service-card.open .chevron { transform: rotate(180deg); }
+
+    /* ── Component Table ── */
+    .components {
+      display: none;
+      border-top: 1px solid #f0f0f0;
+      padding: 0 20px 16px;
+    }
+    .service-card.open .components { display: block; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th {
+      font-size: 0.68rem; font-weight: 700; letter-spacing: 0.8px;
+      text-transform: uppercase; color: #aaa;
+      text-align: left; padding: 6px 10px; border-bottom: 1px solid #f0f0f0;
+    }
+    td { font-size: 0.82rem; padding: 9px 10px; border-bottom: 1px solid #f8f8f8; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+
+    .dep-name { font-weight: 500; font-family: "SF Mono", "Fira Code", monospace; font-size: 0.78rem; }
+    .critical-true  { font-size: 0.68rem; color: #dc3545; font-weight: 600; }
+    .critical-false { font-size: 0.68rem; color: #888; }
+    .latency { font-size: 0.78rem; color: #555; font-family: monospace; }
+    .latency.warn { color: #e67e00; font-weight: 600; }
+    .error-msg { font-size: 0.75rem; color: #c0392b; font-family: monospace; }
+
+    .status-dot {
+      display: inline-block; width: 8px; height: 8px;
+      border-radius: 50%; margin-right: 6px; flex-shrink: 0;
+    }
+    .dot-up       { background: #28a745; }
+    .dot-down     { background: #dc3545; }
+    .dot-starting { background: #aaa; }
+
+    /* ── Stats bar ── */
+    .stats-bar {
+      display: flex; gap: 16px; flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    .stat-chip {
+      background: #fff; border-radius: 8px;
+      padding: 12px 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.07);
+      display: flex; flex-direction: column; gap: 2px;
+      min-width: 110px;
+    }
+    .stat-chip .val { font-size: 1.6rem; font-weight: 700; line-height: 1; }
+    .stat-chip .lbl { font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 0.6px; }
+    .val-up       { color: #28a745; }
+    .val-degraded { color: #e0a800; }
+    .val-down     { color: #dc3545; }
+
+    /* ── Footer ── */
+    footer {
+      text-align: center; padding: 32px 16px;
+      font-size: 0.75rem; color: #bbb;
+    }
+
+    /* ── Pulse animation for DOWN ── */
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .badge-down { animation: pulse 1.8s ease-in-out infinite; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>&#9632; Service Health Dashboard</h1>
+  <span class="meta">Last refreshed: <span id="last-refresh">—</span> &nbsp;·&nbsp; Auto-refresh every 30s (wireframe: static)</span>
+</header>
+
+<div class="global-banner degraded">
+  <span class="dot"></span>
+  SOME SERVICES DEGRADED — Most systems operational. address-search-api is unavailable across webfront layer.
+</div>
+
+<main>
+
+  <!-- ── Summary chips ── -->
+  <div class="section-title">Overview</div>
+  <div class="stats-bar">
+    <div class="stat-chip"><span class="val val-up">4</span><span class="lbl">Healthy</span></div>
+    <div class="stat-chip"><span class="val val-degraded">1</span><span class="lbl">Degraded</span></div>
+    <div class="stat-chip"><span class="val val-down">0</span><span class="lbl">Down</span></div>
+    <div class="stat-chip"><span class="val" style="color:#555">5</span><span class="lbl">Total Services</span></div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════
+       FRONTEND LAYER
+  ══════════════════════════════════════════════ -->
+  <div class="section-title">Frontend Layer</div>
+
+  <!-- gas-webfront — DEGRADED -->
+  <div class="service-card" id="card-gas-webfront">
+    <div class="service-header" onclick="toggle('card-gas-webfront')">
+      <div class="service-left">
+        <span class="status-dot dot-up"></span>
+        <div>
+          <div class="service-name">gas-webfront</div>
+          <div class="service-desc">CakePHP · User-facing gas portal</div>
+        </div>
+      </div>
+      <div class="service-right">
+        <span class="badge badge-degraded">Degraded</span>
+        <span class="service-ts">checked 18s ago</span>
+        <span class="chevron">▼</span>
+      </div>
+    </div>
+    <div class="components">
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Status</th>
+            <th>Critical</th>
+            <th>Latency</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="dep-name">memcache</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency">1 ms</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="dep-name">consumer_user_master_api</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency">10 ms</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="dep-name">energy_contract_api</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency">12 ms</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="dep-name">gas_common_api</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency">9 ms</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="dep-name">gas_billing_api</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency">11 ms</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="dep-name">denki_common_api</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency">8 ms</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="dep-name">address_search_api</td>
+            <td><span class="status-dot dot-down"></span>DOWN</td>
+            <td class="critical-false">no</td>
+            <td class="latency">—</td>
+            <td class="error-msg">Connection refused</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════
+       API LAYER
+  ══════════════════════════════════════════════ -->
+  <div class="section-title">API Layer</div>
+
+  <!-- energy-contract-api — UP -->
+  <div class="service-card" id="card-energy-contract-api">
+    <div class="service-header" onclick="toggle('card-energy-contract-api')">
+      <div class="service-left">
+        <span class="status-dot dot-up"></span>
+        <div>
+          <div class="service-name">energy-contract-api</div>
+          <div class="service-desc">Go · Contract management · connects to Salesforce</div>
+        </div>
+      </div>
+      <div class="service-right">
+        <span class="badge badge-up">Up</span>
+        <span class="service-ts">checked 5s ago</span>
+        <span class="chevron">▼</span>
+      </div>
+    </div>
+    <div class="components">
+      <table>
+        <thead>
+          <tr><th>Component</th><th>Status</th><th>Critical</th><th>Latency</th><th>Error</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="dep-name">database</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency">6 ms</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="dep-name">salesforce_api</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency warn">320 ms</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- gas-common-api — UP -->
+  <div class="service-card" id="card-gas-common-api">
+    <div class="service-header" onclick="toggle('card-gas-common-api')">
+      <div class="service-left">
+        <span class="status-dot dot-up"></span>
+        <div>
+          <div class="service-name">gas-common-api</div>
+          <div class="service-desc">Go · Shared gas domain logic</div>
+        </div>
+      </div>
+      <div class="service-right">
+        <span class="badge badge-up">Up</span>
+        <span class="service-ts">checked 22s ago</span>
+        <span class="chevron">▼</span>
+      </div>
+    </div>
+    <div class="components">
+      <table>
+        <thead>
+          <tr><th>Component</th><th>Status</th><th>Critical</th><th>Latency</th><th>Error</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="dep-name">database</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency">4 ms</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="dep-name">cache_redis</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency">2 ms</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- gas-billing-api — UP -->
+  <div class="service-card" id="card-gas-billing-api">
+    <div class="service-header" onclick="toggle('card-gas-billing-api')">
+      <div class="service-left">
+        <span class="status-dot dot-up"></span>
+        <div>
+          <div class="service-name">gas-billing-api</div>
+          <div class="service-desc">Laravel · Billing and invoicing</div>
+        </div>
+      </div>
+      <div class="service-right">
+        <span class="badge badge-up">Up</span>
+        <span class="service-ts">checked 11s ago</span>
+        <span class="chevron">▼</span>
+      </div>
+    </div>
+    <div class="components">
+      <table>
+        <thead>
+          <tr><th>Component</th><th>Status</th><th>Critical</th><th>Latency</th><th>Error</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="dep-name">database</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency">7 ms</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="dep-name">cache_redis</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency">2 ms</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- consumer-user-master-api — UP -->
+  <div class="service-card" id="card-consumer-user-master-api">
+    <div class="service-header" onclick="toggle('card-consumer-user-master-api')">
+      <div class="service-left">
+        <span class="status-dot dot-up"></span>
+        <div>
+          <div class="service-name">consumer-user-master-api</div>
+          <div class="service-desc">Go · User identity and login</div>
+        </div>
+      </div>
+      <div class="service-right">
+        <span class="badge badge-up">Up</span>
+        <span class="service-ts">checked 3s ago</span>
+        <span class="chevron">▼</span>
+      </div>
+    </div>
+    <div class="components">
+      <table>
+        <thead>
+          <tr><th>Component</th><th>Status</th><th>Critical</th><th>Latency</th><th>Error</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="dep-name">database</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency">5 ms</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="dep-name">cache_redis</td>
+            <td><span class="status-dot dot-up"></span>UP</td>
+            <td class="critical-true">YES</td>
+            <td class="latency">1 ms</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  Wireframe only — static dummy data &nbsp;·&nbsp;
+  In production, each card polls its service's <code>/ready</code> endpoint every 30s &nbsp;·&nbsp;
+  HTTP status code drives badge colour &nbsp;·&nbsp; JSON body populates the component table
+</footer>
+
+<script>
+  // Expand first card by default so the component table is visible on load
+  document.getElementById('card-gas-webfront').classList.add('open');
+
+  function toggle(id) {
+    document.getElementById(id).classList.toggle('open');
+  }
+
+  // Stamp the last-refresh time
+  function stampTime() {
+    const now = new Date();
+    document.getElementById('last-refresh').textContent =
+      now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+  stampTime();
+  // In production: setInterval(fetchAllAndRender, 30000);
+</script>
+
+</body>
+</html>
