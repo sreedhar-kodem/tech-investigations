@@ -1,5 +1,56 @@
 # Multi-Tier Health Check Strategy for GCP Workloads
 
+## Table of Contents
+
+- [Problem Statement](#problem-statement)
+- [Architecture Overview](#architecture-overview)
+- [Solution Approach](#solution-approach)
+  - [The Two Questions](#the-two-questions)
+  - [The Three States](#the-three-states)
+  - [The Asynchronous Pattern](#the-asynchronous-pattern)
+- [Why `/ready` Must Not Run Checks On-Demand](#why-ready-must-not-run-checks-on-demand)
+  - [Problem 1 — Probe timeout = false-positive pod removal](#problem-1--probe-timeout--false-positive-pod-removal)
+  - [Problem 2 — Cascading load during dependency stress](#problem-2--cascading-load-during-dependency-stress)
+  - [Problem 3 — PHP-FPM has no persistent background context](#problem-3--php-fpm-has-no-persistent-background-context)
+  - [Problem 4 — A hanging dependency blocks the probe indefinitely](#problem-4--a-hanging-dependency-blocks-the-probe-indefinitely)
+  - [The correct approach for PHP apps](#the-correct-approach-for-php-apps)
+  - [Comparison](#comparison)
+- [Probe-to-Endpoint Mapping](#probe-to-endpoint-mapping)
+- [Why `/health` Must Stay Simple](#why-health-must-stay-simple)
+  - [What happens if you add dependency checks to `/health`](#what-happens-if-you-add-dependency-checks-to-health)
+  - [The rule](#the-rule)
+- [Why `/ready` Exists](#why-ready-exists)
+  - [GKE Probe Configuration](#gke-probe-configuration)
+  - [GCP Load Balancer](#gcp-load-balancer)
+- [Endpoint Behavior Reference](#endpoint-behavior-reference)
+  - [GET /health](#get-health)
+  - [GET /ready](#get-ready)
+- [Recommended JSON Response Structure](#recommended-json-response-structure)
+  - [UP — HTTP 200](#up--http-200)
+  - [DEGRADED — HTTP 200](#degraded--http-200)
+  - [DOWN — HTTP 503](#down--http-503)
+  - [Field Reference](#field-reference)
+  - [Field Explanations](#field-explanations)
+- [Status Decision Flow](#status-decision-flow)
+- [Status Decision Logic](#status-decision-logic)
+- [How to Use the JSON Response](#how-to-use-the-json-response)
+  - [1. Load Balancer Health Check](#1-load-balancer-health-check)
+  - [2. Kubernetes Probes](#2-kubernetes-probes)
+  - [3. GCP Cloud Monitoring — Uptime Check](#3-gcp-cloud-monitoring--uptime-check)
+  - [4. Application-Level Circuit Breakers](#4-application-level-circuit-breakers)
+  - [5. SLA Reporting](#5-sla-reporting)
+  - [6. Incident Response](#6-incident-response)
+- [Summary](#summary)
+- [Real-World Example: gas-webfront → energy-contract-api → Salesforce](#real-world-example-gas-webfront--energy-contract-api--salesforce)
+  - [Service topology](#service-topology)
+  - [Health check ownership — one hop per service](#health-check-ownership--one-hop-per-service)
+  - [What happens when Salesforce goes DOWN](#what-happens-when-salesforce-goes-down)
+  - [What happens when address-search-api goes DOWN](#what-happens-when-address-search-api-goes-down)
+  - [The key distinction](#the-key-distinction)
+  - [Why not chain `/ready` calls — the blast radius problem](#why-not-chain-ready-calls--the-blast-radius-problem)
+
+---
+
 ## Problem Statement
 
 Modern cloud-native applications running on GCP (GKE, Cloud Run) face a fundamental operational challenge: **a single health signal is not enough to describe the state of a running service**.
